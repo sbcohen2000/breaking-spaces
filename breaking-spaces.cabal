@@ -1,0 +1,19 @@
+cabal-version:      3.0
+name:               breaking-spaces
+version:            0.1.0.0
+author:             Sam Cohen
+maintainer:         samcohen@uchicago.edu
+build-type:         Simple
+
+executable breaking-spaces
+    main-is:          Main.hs
+    other-modules: Layout
+    build-depends:
+         SVGFonts,
+         base ^>=4.18.2.1,
+         diagrams-lib,
+         diagrams-svg,
+         mtl,
+         vector,
+    hs-source-dirs:   .
+    default-language: GHC2021
