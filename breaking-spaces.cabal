@@ -7,6 +7,7 @@ build-type:         Simple
 
 executable breaking-spaces
     main-is:          Main.hs
+    ghc-options: -Wall -Wno-name-shadowing
     other-modules: Layout
     build-depends:
          SVGFonts,

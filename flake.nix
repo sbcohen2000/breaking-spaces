@@ -18,6 +18,8 @@
 
               # Dependencies of diagrams
               zlib
+              darwin.apple_sdk.frameworks.CoreServices
+              darwin.apple_sdk.frameworks.Cocoa
             ];
           };
         }

@@ -1,45 +1,91 @@
 module Main where
 
+import Control.Monad
+import Control.Monad.State
 import Diagrams.Backend.SVG.CmdLine
 import Diagrams.Prelude
-import Graphics.SVGFonts.PathInRect (PathInRect(..))
 import Graphics.SVGFonts.ReadFont (PreparedFont)
 import Layout
+import Numeric
 import qualified Graphics.SVGFonts as F
 
 t :: String
-t = "During much of the letterpress era, movable type was composed by hand for each page by workers called compositors. A tray with many dividers, called a case, contained cast metal sorts, each with a single letter or symbol, but backwards (so they would print correctly). The compositor assembled these sorts into words, then lines, then pages of text, which were then bound tightly together by a frame, making up a form or page. If done correctly, all letters were of the same height, and a flat surface of type was created. The form was placed in a press and inked, and then printed (an impression made) on paper.[3] Metal type read backwards, from right to left, and a key skill of the compositor was their ability to read this backwards text."
+t = unwords [ "These H-gadgets are inserted between each fragment"
+            , "on a line (as opposed to V-gadgets, which are inserted"
+            , "between lines). Once the h-gadgets have been inserted"
+            , "the length of each line can be found by summing the"
+            , "width of each fragment, along with the width of its"
+            , "abutting H-gadgets."
+            , "  After width resolution, it's time to resolve the height"
+            , "of each line. So called height resolution is accomplished"
+            , "using V-gadgets, which are analagous to H-gadgets,"
+            , "but exist between lines as opposed to between fragments."
+            , "These V-gadgets are inserted based on the horizontal"
+            , "positions of the H-gadgets found in the previous phase." ]
 
-line :: PreparedFont Double -> FinishedLine -> Diagram B
-line font = go 0
+w :: Double
+w = 500
+
+nextIndex :: State Int Int
+nextIndex = do
+  n <- gets id
+  modify (+1)
+  pure n
+
+formatDouble :: Double -> String
+formatDouble d = showFFloat (Just 3) d ""
+
+line :: PreparedFont Double -> FinishedLineWithAdj -> State Int (Diagram B)
+line font (line, r) = go 0 line
   where
-    go :: Double -> FinishedLine -> Diagram B
-    go _ [] = mempty
-    go x (w:ws) =
-      (F.drop_rect . F.fit_height (1 * em) $ F.svgText def{F.textFont = font} (unWidth . fst $ w))
+    go :: Double -> FinishedLine -> State Int (Diagram B)
+    go x [] =
+      pure $ (F.drop_rect . F.fit_height (0.75 * em) $ F.svgText def{F.textFont = font} (formatDouble r))
       # stroke
       # lw none
-      # fc black
-      # translateX x
-      <> go (x + wordWidth + glueWidth) ws
+      # fc blue
+      # translateX (max w x + 10.0)
+    go x (w:ws) = do
+      i <- nextIndex
+      let word =
+            (F.drop_rect . F.fit_height (1 * em) $ F.svgText def{F.textFont = font} (unWidth . fst $ w))
+            # stroke
+            # lw none
+            # fc black
+            # translateX x
+      let indexLabel =
+            (F.drop_rect . F.fit_height (0.5 * em) $ F.svgText def{F.textFont = font} (show i))
+            # stroke
+            # lw none
+            # fc red
+            # translateX x
+            # translateY (0.5 * em)
+      let glue =
+            rect glueWidth (0.5 * em)
+            # lw none
+            # fc lightgray
+            # translateY (0.25 * em)
+            # translateX (x + wordWidth + (glueWidth / 2))
+      rest <- go (x + wordWidth + glueWidth) ws
+      pure $ mconcat [word, indexLabel, glue, rest]
       where
         wordWidth = Layout.width (fst w)
         -- If we wanted ragged-right text, we could just set the
         -- `glueWidth` to its idealWidth (1/3 em).
-        glueWidth = Layout.width (snd w)
+        glueWidth = if null ws then 0 else Layout.width (snd w)
 
 paragraph :: PreparedFont Double -> String -> Diagram B
-paragraph font text = mconcat $ zipWith f lines [0..]
+paragraph font text = mconcat $ evalState (zipWithM f lines [0..]) 0
   where
-    f ws lineNo =
-      line font ws
-      # translateY (lineNo * em * (-1.1))
-    lines = findOptimalBreaks font text 500
+    f ws lineNo = do
+      d <- line font ws
+      pure $ d # translateY (lineNo * em * (-1.1))
+    lines = findOptimalBreaks font text w
 
 main :: IO ()
 main = do
   font <- F.loadFont "./font/LiberationSerif.svg"
   let
     diagram :: Diagram B
-    diagram = paragraph font t <> vrule 100 # moveOriginBy (r2 (0, 50)) # translateX 500
+    diagram = paragraph font t <> vrule 100 # moveOriginBy (r2 (0, 50)) # translateX w
   mainWith diagram
