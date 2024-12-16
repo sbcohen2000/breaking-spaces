@@ -84,16 +84,16 @@ mkAccumulators l = Accumulators
     toAccumulator' s (a:as) = s + a:toAccumulator' (s + a) as
 
 totalStretchability :: Accumulators -> Range -> Double
-totalStretchability acc rng = accumSum (stretchabilityAccum acc) (ignoreLast rng)
+totalStretchability acc = accumSum (stretchabilityAccum acc)
 
 totalShrinkability :: Accumulators -> Range -> Double
-totalShrinkability acc rng = accumSum (shrinkabilityAccum acc) (ignoreLast rng)
+totalShrinkability acc = accumSum (shrinkabilityAccum acc)
 
-totalWidth :: Accumulators -> Range -> Double
-totalWidth acc rng = boxWidths + glueWidths
+totalWidth :: Accumulators -> Range -> Range -> Double
+totalWidth acc boxRng glueRng = boxWidths + glueWidths
   where
-    boxWidths = accumSum (widthAccum acc) rng
-    glueWidths = accumSum (idealWidthAccum acc) (ignoreLast rng)
+    boxWidths = accumSum (widthAccum acc) boxRng
+    glueWidths = accumSum (idealWidthAccum acc) glueRng
 
 ignoreLast :: Range -> Range
 ignoreLast Range { begin, end } =
@@ -113,12 +113,27 @@ accumSum v Range{ .. } = v V.! (end - 1) - v V.! (begin - 1)
 --
 -- Note that if r < -1, then there will never be enough shrinkability
 -- to layout the line.
-adjustmentRatio :: Double -> Accumulators -> Range -> Double
-adjustmentRatio desiredWidth acc range
+--
+-- This version of the function is exclusive on the last glue
+-- (i.e. glue is only counted _between_ the boxes in `range').
+adjustmentRatioEx :: Double -> Accumulators -> Range -> Double
+adjustmentRatioEx desiredWidth acc range
+  | w < desiredWidth = (desiredWidth - w) / totalStretchability acc glueRng
+  | otherwise = (desiredWidth - w) / totalShrinkability acc glueRng
+  where
+    w = totalWidth acc boxRng glueRng
+
+    boxRng = range
+    glueRng = ignoreLast range
+
+-- | See `adjustmentRatioEx`. This version of the function counts the
+-- glue after the last box in `range'.
+adjustmentRatioIn :: Double -> Accumulators -> Range -> Double
+adjustmentRatioIn desiredWidth acc range
   | w < desiredWidth = (desiredWidth - w) / totalStretchability acc range
   | otherwise = (desiredWidth - w) / totalShrinkability acc range
   where
-    w = totalWidth acc range
+    w = totalWidth acc range range
 
 defaultGlue :: Glue
 defaultGlue = Glue
@@ -127,11 +142,18 @@ defaultGlue = Glue
   , shrinkability = em / 9
   }
 
+finishingGlue :: Glue
+finishingGlue = Glue
+  { idealWidth = 0
+  , stretchability = 10000
+  , shrinkability = 0
+  }
+
 -- | Set the final width of `Glue` given the adjustment ratio of the
 -- line.
 widthGlue :: Double -> Glue -> Widthed Glue
 widthGlue r g
-  | r < -1 || r > 1 = Widthed (idealWidth g) g
+  | r < -1 = Widthed (idealWidth g) g
   | r >= 0 = Widthed (idealWidth g + r * stretchability g) g
   | otherwise = Widthed (idealWidth g + r * shrinkability g) g
 
@@ -186,20 +208,12 @@ addFeasible l i = do
   breaks <- gets activeBreaks
   allCandidates <- forM breaks $ \a@BreakNode { .. } -> do
     acc <- gets accumulators
-    let r = adjustmentRatio l acc (Range index i)
+    let r = adjustmentRatioEx l acc (Range index i)
     pure $ BreakNode (Just a) (cost + badness r) i r
-  -- Test if r is acceptable. These bounds can be tweaked to allow
-  -- tighter or looser lines.
-  let goodCandidates =
-        filter (\bn -> r bn > -1 && r bn < 1) allCandidates
   -- Since the cost of each parent is factored into the cost of each
   -- candidate, we know with certainity that only the lowest cost
   -- candidate at this point will yield an optimal layout.
-  let candidates =
-        if null goodCandidates
-        then allCandidates
-        else goodCandidates
-  let best = minimumBy (compare `on` cost) candidates
+  let best = minimumBy (compare `on` cost) allCandidates
   modify (\s -> s { activeBreaks = best:breaks })
 
 -- | Remove all breakpoints from the active list for which a line
@@ -222,7 +236,7 @@ filterInfeasible l i = do
   where
     attachAdjustmentRatio :: Accumulators -> BreakNode -> (BreakNode, Double)
     attachAdjustmentRatio acc n@BreakNode { .. } =
-      (n, adjustmentRatio l acc (Range index i))
+      (n, adjustmentRatioEx l acc (Range index i))
 
 -- | Find the best locations to break the text.
 findOptimalBreaks :: PreparedFont Double -> String -> Double -> [FinishedLineWithAdj]
@@ -230,7 +244,7 @@ findOptimalBreaks _  "" _ = []
 findOptimalBreaks font text l =
   breakTextAtPoints withGlue finalAdjRatio bestBreak
   where
-    finalAdjRatio = adjustmentRatio l
+    finalAdjRatio = adjustmentRatioIn l
       (accumulators finalState)
       (Range lastBreakIndex (length withGlue))
 
@@ -246,8 +260,10 @@ findOptimalBreaks font text l =
       { activeBreaks = [BreakNode Nothing 0 0 0]
       , accumulators = mkAccumulators withGlue
       }
+
     withGlue =
-      map ((, defaultGlue) . widthString font) ws
+      map ((, defaultGlue) . widthString font) (init ws)
+      ++ [(widthString font (last ws), finishingGlue)]
 
     ws = words text
 
